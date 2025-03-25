@@ -53,15 +53,19 @@ def segmentation(images, segment_root, matcher_conf):
                 np.save(segment_path, mask)
 
 
-def main(scene_name, version):
+def colmap_reconstruction(version, scene_name=None, root_dir=None):
     # Setup
-    images = Path('inputs') / scene_name / 'images'
-
-    outputs = Path('outputs') / scene_name / version
+    if scene_name is not None:
+        images = Path('inputs') / scene_name / 'images'
+        outputs = Path('outputs') / scene_name / version
+        segment_root = Path('outputs') / scene_name / 'segment'
+    elif root_dir is not None:
+        images = Path(root_dir) / 'images'
+        outputs = Path(root_dir) / version
+        segment_root = Path(root_dir) / 'segment'
+    
     outputs.mkdir(parents=True, exist_ok=True)
     os.environ['GIMRECONSTRUCTION'] = str(outputs)
-
-    segment_root = Path('outputs') / scene_name / 'segment'
     segment_root.mkdir(parents=True, exist_ok=True)
 
     sfm_dir = outputs / 'sparse'
@@ -139,4 +143,4 @@ if __name__ == '__main__':
                         default='gim_dkm')
     args = parser.parse_args()
     
-    main(args.scene_name, args.version)
+    colmap_reconstruction(args.version, scene_name=args.scene_name)

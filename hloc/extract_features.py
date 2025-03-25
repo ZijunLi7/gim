@@ -189,8 +189,7 @@ class ImageDataset(torch.utils.data.Dataset):
         if paths is None:
             paths = []
             for g in conf.globs:
-                paths += glob.glob(
-                    (Path(root) / '**' / g).as_posix(), recursive=True)
+                paths += list(Path(root).rglob(g))
             if len(paths) == 0:
                 raise ValueError(f'Could not find any image in root: {root}.')
             paths = sorted(set(paths))

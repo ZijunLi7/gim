@@ -52,8 +52,8 @@ def main(
         for j, n2 in enumerate(names_ref):
             if self_matching and j <= i:
                 continue
-            # if j - i > 5:
-            #     continue
+            if j - i > 1:
+                continue
             pairs.append((n1, n2))
 
     logger.info(f'Found {len(pairs)} pairs.')
