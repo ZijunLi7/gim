@@ -6,6 +6,18 @@ import json
 import argparse
 from tqdm import tqdm
 from reconstruction import colmap_reconstruction
+import logging
+from pathlib import Path
+import torch
+import signal
+import time
+import pycolmap
+
+class TimeoutException(Exception):
+    pass
+
+def timeout_handler(signum, frame):
+    raise TimeoutException("Task timed out")
 
 def read_video_list(video_list_path):
     """Read the list of videos from a text file."""
@@ -94,20 +106,58 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     # Segment durations in seconds
     durations = [30, 60, 120]
     
+    # 设置日志
+    log_path = Path('reconstruction_out') / 'reconstruction_errors.log'
+    logging.basicConfig(
+        filename=log_path,
+        filemode='w',
+        level=logging.ERROR,
+        format='%(message)s'
+    )
+    
+    TIMEOUT = 3600 
+
     # Process each video
     for video_name in tqdm(video_list, desc="Processing videos"):
         video_path = os.path.join(base_path, 'video_1080p/' + video_name + '.mp4')
-        
-        # Get video filename without extension
         video_basename = os.path.splitext(os.path.basename(video_name))[0]
         
-        # Process different segment durations
         for duration in durations:
-            output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
-            # Use video name as part of the seed for variation between videos
-            video_seed = seed + duration + hash(video_name) % 10000
-            extract_frames(video_path, output_dir + '/images', duration, video_seed)
-            colmap_reconstruction(version, root_dir=output_dir)
+            try:
+                output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
+                video_seed = seed + duration + hash(video_name) % 10000
+                
+                # 设置信号处理器
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(TIMEOUT)
+                
+                start_time = time.time()
+                extract_frames(video_path, output_dir + '/images', duration, video_seed)
+                colmap_reconstruction(version, root_dir=output_dir)
+
+                reconstruction_dir = output_dir + '/' + version + '/sparse'
+                for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
+                    if not Path(reconstruction_dir + '/' + filename).exists():
+                        logging.error(f"{video_name}: {filename} reconstruction failed")
+                    else:
+                        reconstruction = pycolmap.Reconstruction(reconstruction_dir)
+                        for camera_id, camera in reconstruction.cameras.items():
+                            print(camera_id, camera)
+                
+            except Exception as e:
+                # 统一处理所有异常
+                if isinstance(e, TimeoutException):
+                    elapsed_time = int(time.time() - start_time)
+                    error_msg = f"{video_name} {duration}s: Timeout after {elapsed_time} seconds"
+                else:
+                    error_msg = f"{video_name} {duration}s: {str(e)}"
+                
+                logging.error(error_msg)
+                print(f"Error processing {video_name} {duration}s. See log file for details.")
+                
+            finally:
+                # 取消定时器
+                signal.alarm(0)
 
 def main():
     parser = argparse.ArgumentParser(description="Extract frames from videos.")
@@ -118,6 +168,13 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     
     args = parser.parse_args()
+
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     process_videos(
         args.base_path,

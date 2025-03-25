@@ -52,7 +52,7 @@ def main(
         for j, n2 in enumerate(names_ref):
             if self_matching and j <= i:
                 continue
-            if j - i > 1:
+            if j - i > 5:
                 continue
             pairs.append((n1, n2))
 

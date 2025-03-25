@@ -68,7 +68,7 @@ def run_reconstruction(sfm_dir: Path,
 
     if len(reconstructions) == 0:
         logger.error('Could not reconstruct any model!')
-        return None
+        raise ValueError('No models were reconstructed.')
     logger.info(f'Reconstructed {len(reconstructions)} model(s).')
 
     largest_index = None
