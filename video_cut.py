@@ -94,7 +94,7 @@ def extract_frames(video_path, output_dir, segment_duration, seed):
     # Release the video capture
     cap.release()
 
-def process_single_video(video_name, base_path, output_base_dir, version, seed, gpu_id):
+def process_single_video(video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout):
     """Process a single video on specified GPU."""
     # Set independent deterministic random seed for each process
     process_seed = seed + hash(video_name) % 10000
@@ -118,7 +118,6 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     # Store camera parameters for different durations
     camera_params = {}
     camera_params_out_duration = []
-    durations = [30, 60, 120]
     
     for duration in durations:
         try:
@@ -127,7 +126,7 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
             
             # Set signal handler
             signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(TIMEOUT)
+            signal.alarm(timeout)
             
             start_time = time.time()
             extract_frames(video_path, output_dir + '/images', duration, video_seed)
@@ -169,10 +168,13 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     
     return video_basename, camera_params
 
-def process_videos(base_path, video_list_path, output_base_dir, version, seed=42):
+def process_videos(base_path, video_list_path, output_base_dir, version, seed=42, durations=None, timeout=3600):
     """Process videos in parallel using multiple GPUs."""
     # Read video list
-    video_list = sorted(read_video_list(os.path.join(base_path, video_list_path)))  # Ensure fixed video list order
+    video_list = sorted(read_video_list(os.path.join(base_path, video_list_path)))
+    
+    if durations is None:
+        durations = [30, 60, 120]  # Default durations if not specified
     
     # Set global random seeds
     random.seed(seed)
@@ -188,8 +190,6 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
         format='%(message)s'
     )
     
-    TIMEOUT = 3600 
-    
     # Get number of available GPUs
     num_gpus = torch.cuda.device_count()
     processes_per_gpu = 4
@@ -199,11 +199,11 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     mp.set_start_method('spawn', force=True)
     pool = mp.Pool(processes=total_processes)
     
-    # Prepare arguments for each video - 使用固定的分配方式
+    # Prepare arguments for each video
     process_args = []
     for i, video_name in enumerate(video_list):
         gpu_id = (i // processes_per_gpu) % num_gpus
-        process_args.append((video_name, base_path, output_base_dir, version, seed, gpu_id))
+        process_args.append((video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout))
     
     # Process videos in parallel with fixed chunk size
     results = pool.starmap(process_single_video, process_args, chunksize=1)
@@ -222,35 +222,7 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     np.savez(os.path.join(output_base_dir, 'camera_stats.npz'), **all_camera_params)
     print(f"Camera statistics saved to {os.path.join(output_base_dir, 'camera_stats.npz')}")
 
-def calculate_camera_stats(camera_params_by_duration):
-    """Calculate mean and variance of camera parameters for different durations"""
-    # Collect all camera parameters
-    all_params = []
-    
-    # Iterate through all durations
-    for duration, cameras in camera_params_by_duration.items():
-        for camera_id, camera in cameras.items():
-            all_params.append(camera['params'])
-    
-    # Convert to numpy array for calculation
-    if all_params:
-        params_array = np.array(all_params)
-        mean_params = np.mean(params_array, axis=0)
-        var_params = np.var(params_array, axis=0)
-        
-        return {
-            'mean': mean_params,
-            'variance': var_params,
-            'count': len(all_params),
-            'raw_data': camera_params_by_duration  # Optional: save raw data
-        }
-    else:
-        return {
-            'mean': None,
-            'variance': None,
-            'count': 0,
-            'raw_data': camera_params_by_duration
-        }
+
 
 def main():
     parser = argparse.ArgumentParser(description="Extract frames from videos.")
@@ -259,6 +231,10 @@ def main():
     parser.add_argument("--output_dir", required=True, help="Base output directory for frames")
     parser.add_argument('--version', type=str, choices={'gim_dkm', 'gim_lightglue'}, default='gim_dkm')
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--durations", type=int, nargs='+', default=[30, 60, 120],
+                      help="List of video segment durations in seconds (default: [30, 60, 120])")
+    parser.add_argument("--timeout", type=int, default=3600,
+                      help="Timeout for processing each video segment in seconds (default: 3600)")
     
     args = parser.parse_args()
 
@@ -267,7 +243,9 @@ def main():
         args.video_list,
         args.output_dir,
         args.version,
-        args.seed
+        args.seed,
+        args.durations,
+        args.timeout
     )
 
 if __name__ == "__main__":

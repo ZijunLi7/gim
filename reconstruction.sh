@@ -14,11 +14,14 @@ VIDEO_LIST="2.txt"
 VERSION="gim_lightglue"
 OUTPUT_DIR="reconstruction_out"
 SEED=777
+DURATIONS="30 60 120"
+TIMEOUT=3600
 
 # 运行命令
 $PYTHON video_cut.py \
     --base_path "$BASE_PATH" \
     --video_list "$VIDEO_LIST" \
-    --version "$VERSION" \
     --output_dir "$OUTPUT_DIR" \
-    --seed "$SEED"
+    --seed "$SEED" \
+    --durations "$DURATIONS" \
+    --timeout "$TIMEOUT"
