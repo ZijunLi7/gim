@@ -12,6 +12,9 @@ import torch
 import signal
 import time
 import pycolmap
+import multiprocessing
+from functools import partial
+import torch.multiprocessing as mp
 
 class TimeoutException(Exception):
     pass
@@ -91,19 +94,92 @@ def extract_frames(video_path, output_dir, segment_duration, seed):
     # Release the video capture
     cap.release()
 
-def process_videos(base_path, video_list_path, output_base_dir, version, seed=42):
-    """Process all videos in the list."""
-    # Read video list
-    video_list = read_video_list(os.path.join(base_path, video_list_path))
+def process_single_video(video_name, base_path, output_base_dir, version, seed, gpu_id):
+    """Process a single video on specified GPU."""
+    # Set independent deterministic random seed for each process
+    process_seed = seed + hash(video_name) % 10000
+    random.seed(process_seed)
+    np.random.seed(process_seed)
+    torch.manual_seed(process_seed)
+    torch.cuda.manual_seed(process_seed)
     
-    # Create a fixed iterator with the seed
-    random.seed(seed)
-    np.random.seed(seed)
+    # Set GPU device
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    torch.cuda.set_device(0)
     
-    # Segment durations in seconds
+    # Set PyTorch to deterministic mode
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
+    video_path = os.path.join(base_path, 'video_1080p/' + video_name + '.mp4')
+    video_basename = os.path.splitext(os.path.basename(video_name))[0]
+    
+    # Store camera parameters for different durations
+    camera_params = {}
+    camera_params_out_duration = []
     durations = [30, 60, 120]
     
-    # 设置日志
+    for duration in durations:
+        try:
+            output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
+            video_seed = process_seed + duration
+            
+            # Set signal handler
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(TIMEOUT)
+            
+            start_time = time.time()
+            extract_frames(video_path, output_dir + '/images', duration, video_seed)
+            colmap_reconstruction(version, root_dir=output_dir)
+
+            reconstruction_dir = output_dir + '/' + version + '/sparse'
+            for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
+                if not Path(reconstruction_dir + '/' + filename).exists():
+                    logging.error(f"{video_name}: {filename} reconstruction failed")
+                    continue
+
+            reconstruction = pycolmap.Reconstruction(reconstruction_dir)
+            # Collect camera parameters instead of printing
+            camera_params_in_duration = []
+            for _, camera in reconstruction.cameras.items():
+                camera_params_in_duration.append(camera.params.tolist())
+                camera_params_out_duration.append(camera.params.tolist())
+            camera_params_in_duration = np.array(camera_params_in_duration)
+            camera_params[duration] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
+                                                        np.std(camera_params_in_duration, axis=0)), axis=-1)
+                            
+        except Exception as e:
+            # Handle all exceptions uniformly
+            if isinstance(e, TimeoutException):
+                elapsed_time = int(time.time() - start_time)
+                error_msg = f"{video_name} {duration}s: Timeout after {elapsed_time} seconds"
+            else:
+                error_msg = f"{video_name} {duration}s: {str(e)}"
+            
+            logging.error(error_msg)
+            print(f"Error processing {video_name} {duration}s. See log file for details.")
+            
+        finally:
+            # Cancel timer
+            signal.alarm(0)
+    
+    camera_params['total'] = np.concatenate((np.mean(camera_params_out_duration, axis=0), 
+                                                        np.std(camera_params_out_duration, axis=0)), axis=-1)
+    
+    return video_basename, camera_params
+
+def process_videos(base_path, video_list_path, output_base_dir, version, seed=42):
+    """Process videos in parallel using multiple GPUs."""
+    # Read video list
+    video_list = sorted(read_video_list(os.path.join(base_path, video_list_path)))  # Ensure fixed video list order
+    
+    # Set global random seeds
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    
+    # Set up logging
     log_path = Path('reconstruction_out') / 'reconstruction_errors.log'
     logging.basicConfig(
         filename=log_path,
@@ -114,80 +190,49 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     
     TIMEOUT = 3600 
     
-    # 创建字典存储所有视频的相机参数
-    all_camera_params = {}
-
-    # Process each video
-    for video_name in tqdm(video_list, desc="Processing videos"):
-        video_path = os.path.join(base_path, 'video_1080p/' + video_name + '.mp4')
-        video_basename = os.path.splitext(os.path.basename(video_name))[0]
-        
-        # 存储当前视频不同duration的相机参数
-        all_camera_params[video_basename] = {}
-        camera_params_out_duration = []
-        
-        for duration in durations:
-            try:
-                output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
-                video_seed = seed + duration + hash(video_name) % 10000
-                
-                # 设置信号处理器
-                signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(TIMEOUT)
-                
-                start_time = time.time()
-                extract_frames(video_path, output_dir + '/images', duration, video_seed)
-                colmap_reconstruction(version, root_dir=output_dir)
-
-                reconstruction_dir = output_dir + '/' + version + '/sparse'
-                for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
-                    if not Path(reconstruction_dir + '/' + filename).exists():
-                        logging.error(f"{video_name}: {filename} reconstruction failed")
-                        continue
-
-                reconstruction = pycolmap.Reconstruction(reconstruction_dir)
-                # 收集相机参数而不是打印
-                camera_params_in_duration = []
-                for _, camera in reconstruction.cameras.items():
-                    camera_params_in_duration.append(camera.params.tolist())
-                    camera_params_out_duration.append(camera.params.tolist())
-                camera_params_in_duration = np.array(camera_params_in_duration)
-                all_camera_params[video_basename][duration] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
-                                                                        np.std(camera_params_in_duration, axis=0)), axis=-1)
-                            
-            except Exception as e:
-                # 统一处理所有异常
-                if isinstance(e, TimeoutException):
-                    elapsed_time = int(time.time() - start_time)
-                    error_msg = f"{video_name} {duration}s: Timeout after {elapsed_time} seconds"
-                else:
-                    error_msg = f"{video_name} {duration}s: {str(e)}"
-                
-                logging.error(error_msg)
-                print(f"Error processing {video_name} {duration}s. See log file for details.")
-                
-            finally:
-                # 取消定时器
-                signal.alarm(0)
-        
-        all_camera_params[video_basename]['total'] = np.concatenate((np.mean(camera_params_out_duration, axis=0), 
-                                                                        np.std(camera_params_out_duration, axis=0)), axis=-1)
+    # Get number of available GPUs
+    num_gpus = torch.cuda.device_count()
+    processes_per_gpu = 4
+    total_processes = num_gpus * processes_per_gpu
     
-    # 保存所有视频的相机参数统计信息到NPZ文件
+    # Create process pool
+    mp.set_start_method('spawn', force=True)
+    pool = mp.Pool(processes=total_processes)
+    
+    # Prepare arguments for each video - 使用固定的分配方式
+    process_args = []
+    for i, video_name in enumerate(video_list):
+        gpu_id = (i // processes_per_gpu) % num_gpus
+        process_args.append((video_name, base_path, output_base_dir, version, seed, gpu_id))
+    
+    # Process videos in parallel with fixed chunk size
+    results = pool.starmap(process_single_video, process_args, chunksize=1)
+    
+    # Close the pool
+    pool.close()
+    pool.join()
+    
+    # Combine results
+    all_camera_params = {}
+    for video_basename, camera_params in results:
+        if camera_params:  # Only add if we have valid results
+            all_camera_params[video_basename] = camera_params
+    
+    # Save results
     np.savez(os.path.join(output_base_dir, 'camera_stats.npz'), **all_camera_params)
     print(f"Camera statistics saved to {os.path.join(output_base_dir, 'camera_stats.npz')}")
 
 def calculate_camera_stats(camera_params_by_duration):
-    """计算不同duration下相机参数的均值和方差"""
-    # 收集所有相机参数
+    """Calculate mean and variance of camera parameters for different durations"""
+    # Collect all camera parameters
     all_params = []
     
-    # 遍历所有duration
+    # Iterate through all durations
     for duration, cameras in camera_params_by_duration.items():
         for camera_id, camera in cameras.items():
             all_params.append(camera['params'])
     
-    # 转换为numpy数组以便计算
+    # Convert to numpy array for calculation
     if all_params:
         params_array = np.array(all_params)
         mean_params = np.mean(params_array, axis=0)
@@ -197,7 +242,7 @@ def calculate_camera_stats(camera_params_by_duration):
             'mean': mean_params,
             'variance': var_params,
             'count': len(all_params),
-            'raw_data': camera_params_by_duration  # 可选：保存原始数据
+            'raw_data': camera_params_by_duration  # Optional: save raw data
         }
     else:
         return {
@@ -217,13 +262,6 @@ def main():
     
     args = parser.parse_args()
 
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.use_deterministic_algorithms(True)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    
     process_videos(
         args.base_path,
         args.video_list,
