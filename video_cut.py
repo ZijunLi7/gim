@@ -96,9 +96,6 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     # Read video list
     video_list = read_video_list(os.path.join(base_path, video_list_path))
     
-    # # Read metadata
-    # metadata = read_metadata(os.path.join(base_path, metadata_path))
-    
     # Create a fixed iterator with the seed
     random.seed(seed)
     np.random.seed(seed)
@@ -116,11 +113,18 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     )
     
     TIMEOUT = 3600 
+    
+    # 创建字典存储所有视频的相机参数
+    all_camera_params = {}
 
     # Process each video
     for video_name in tqdm(video_list, desc="Processing videos"):
         video_path = os.path.join(base_path, 'video_1080p/' + video_name + '.mp4')
         video_basename = os.path.splitext(os.path.basename(video_name))[0]
+        
+        # 存储当前视频不同duration的相机参数
+        all_camera_params[video_basename] = {}
+        camera_params_out_duration = []
         
         for duration in durations:
             try:
@@ -139,11 +143,18 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
                 for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
                     if not Path(reconstruction_dir + '/' + filename).exists():
                         logging.error(f"{video_name}: {filename} reconstruction failed")
-                    else:
-                        reconstruction = pycolmap.Reconstruction(reconstruction_dir)
-                        for camera_id, camera in reconstruction.cameras.items():
-                            print(camera_id, camera)
-                
+                        continue
+
+                reconstruction = pycolmap.Reconstruction(reconstruction_dir)
+                # 收集相机参数而不是打印
+                camera_params_in_duration = []
+                for _, camera in reconstruction.cameras.items():
+                    camera_params_in_duration.append(camera.params.tolist())
+                    camera_params_out_duration.append(camera.params.tolist())
+                camera_params_in_duration = np.array(camera_params_in_duration)
+                all_camera_params[video_basename][duration] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
+                                                                        np.std(camera_params_in_duration, axis=0)), axis=-1)
+                            
             except Exception as e:
                 # 统一处理所有异常
                 if isinstance(e, TimeoutException):
@@ -158,6 +169,43 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
             finally:
                 # 取消定时器
                 signal.alarm(0)
+        
+        all_camera_params[video_basename]['total'] = np.concatenate((np.mean(camera_params_out_duration, axis=0), 
+                                                                        np.std(camera_params_out_duration, axis=0)), axis=-1)
+    
+    # 保存所有视频的相机参数统计信息到NPZ文件
+    np.savez(os.path.join(output_base_dir, 'camera_stats.npz'), **all_camera_params)
+    print(f"Camera statistics saved to {os.path.join(output_base_dir, 'camera_stats.npz')}")
+
+def calculate_camera_stats(camera_params_by_duration):
+    """计算不同duration下相机参数的均值和方差"""
+    # 收集所有相机参数
+    all_params = []
+    
+    # 遍历所有duration
+    for duration, cameras in camera_params_by_duration.items():
+        for camera_id, camera in cameras.items():
+            all_params.append(camera['params'])
+    
+    # 转换为numpy数组以便计算
+    if all_params:
+        params_array = np.array(all_params)
+        mean_params = np.mean(params_array, axis=0)
+        var_params = np.var(params_array, axis=0)
+        
+        return {
+            'mean': mean_params,
+            'variance': var_params,
+            'count': len(all_params),
+            'raw_data': camera_params_by_duration  # 可选：保存原始数据
+        }
+    else:
+        return {
+            'mean': None,
+            'variance': None,
+            'count': 0,
+            'raw_data': camera_params_by_duration
+        }
 
 def main():
     parser = argparse.ArgumentParser(description="Extract frames from videos.")

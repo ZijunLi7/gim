@@ -1,18 +1,24 @@
 #!/bin/bash
-scene_name=$1
-version=$2
 
-python reconstruction.py --scene_name ${scene_name} --version ${version}
+# 设置环境变量
+export PYTHONHASHSEED=777
+export CUDA_VISIBLE_DEVICES=1
+export CUBLAS_WORKSPACE_CONFIG=":4096:8"
 
-# gim
-colmap image_undistorter \
-    --image_path inputs/${scene_name}/images \
-    --input_path outputs/${scene_name}/${version}/sparse \
-    --output_path outputs/${scene_name}/${version}/dense
+# 设置 Python 解释器路径
+PYTHON="/home/lzj/anaconda3/envs/GIM/bin/python"
 
-colmap patch_match_stereo \
-    --workspace_path outputs/${scene_name}/${version}/dense
+# 运行参数
+BASE_PATH="/home/lzj/lzj/matching_codes/cursor/balanced_dust3r/data/walk"
+VIDEO_LIST="2.txt"
+VERSION="gim_lightglue"
+OUTPUT_DIR="reconstruction_out"
+SEED=777
 
-colmap stereo_fusion \
-    --workspace_path outputs/${scene_name}/${version}/dense \
-    --output_path outputs/${scene_name}/${version}/dense/dense.ply
+# 运行命令
+$PYTHON video_cut.py \
+    --base_path "$BASE_PATH" \
+    --video_list "$VIDEO_LIST" \
+    --version "$VERSION" \
+    --output_dir "$OUTPUT_DIR" \
+    --seed "$SEED"
