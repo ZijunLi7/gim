@@ -15,6 +15,9 @@ import pycolmap
 import multiprocessing
 from functools import partial
 import torch.multiprocessing as mp
+from contextlib import contextmanager
+import threading
+import _thread
 
 class TimeoutException(Exception):
     pass
@@ -94,18 +97,37 @@ def extract_frames(video_path, output_dir, segment_duration, seed):
     # Release the video capture
     cap.release()
 
+@contextmanager
+def time_limit(seconds):
+    timer = threading.Timer(seconds, lambda: _thread.interrupt_main())
+    timer.start()
+    try:
+        yield
+    except KeyboardInterrupt:
+        raise TimeoutException("Task timed out")
+    finally:
+        timer.cancel()
+
+def init_worker():
+    """Initialize worker process before running."""
+    import torch
+    torch.set_num_threads(1)  # 限制每个进程的 CPU 线程数
+
 def process_single_video(video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout):
     """Process a single video on specified GPU."""
+    # Set GPU device before importing torch and other GPU related modules
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    
+    # Import torch and set device after setting CUDA_VISIBLE_DEVICES
+    import torch
+    torch.cuda.set_device(0)
+    
     # Set independent deterministic random seed for each process
     process_seed = seed + hash(video_name) % 10000
     random.seed(process_seed)
     np.random.seed(process_seed)
     torch.manual_seed(process_seed)
     torch.cuda.manual_seed(process_seed)
-    
-    # Set GPU device
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-    torch.cuda.set_device(0)
     
     # Set PyTorch to deterministic mode
     torch.use_deterministic_algorithms(True)
@@ -120,69 +142,66 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     camera_params_out_duration = []
     
     for duration in durations:
-        try:
-            output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
-            video_seed = process_seed + duration
-            
-            # Set signal handler
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(timeout)
-            
-            start_time = time.time()
+        # try:
+        output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
+        video_seed = process_seed + duration
+        start_time = time.time()
+        
+        # 合并所有需要超时控制的操作
+        with time_limit(timeout):
             extract_frames(video_path, output_dir + '/images', duration, video_seed)
             colmap_reconstruction(version, root_dir=output_dir)
+            
+        reconstruction_dir = output_dir + '/' + version + '/sparse'
+        for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
+            if not Path(reconstruction_dir + '/' + filename).exists():
+                raise RuntimeError(f"{filename} reconstruction failed")
 
-            reconstruction_dir = output_dir + '/' + version + '/sparse'
-            for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
-                if not Path(reconstruction_dir + '/' + filename).exists():
-                    logging.error(f"{video_name}: {filename} reconstruction failed")
-                    continue
-
-            reconstruction = pycolmap.Reconstruction(reconstruction_dir)
-            # Collect camera parameters instead of printing
-            camera_params_in_duration = []
-            for _, camera in reconstruction.cameras.items():
-                camera_params_in_duration.append(camera.params.tolist())
-                camera_params_out_duration.append(camera.params.tolist())
-            camera_params_in_duration = np.array(camera_params_in_duration)
-            camera_params[duration] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
-                                                        np.std(camera_params_in_duration, axis=0)), axis=-1)
+        reconstruction = pycolmap.Reconstruction(reconstruction_dir)
+        camera_params_in_duration = []
+        for _, camera in reconstruction.cameras.items():
+            camera_params_in_duration.append(camera.params.tolist())
+            camera_params_out_duration.append(camera.params.tolist())
+        camera_params_in_duration = np.array(camera_params_in_duration)
+        camera_params[duration] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
+                                            np.std(camera_params_in_duration, axis=0)), axis=-1)
                             
-        except Exception as e:
-            # Handle all exceptions uniformly
-            if isinstance(e, TimeoutException):
-                elapsed_time = int(time.time() - start_time)
-                error_msg = f"{video_name} {duration}s: Timeout after {elapsed_time} seconds"
-            else:
-                error_msg = f"{video_name} {duration}s: {str(e)}"
-            
+        except TimeoutException:
+            elapsed_time = int(time.time() - start_time)
+            error_msg = f"{video_name} {duration}s: Timeout after {elapsed_time} seconds"
             logging.error(error_msg)
-            print(f"Error processing {video_name} {duration}s. See log file for details.")
+            print(f"Error processing {video_name} {duration}s: Timeout")
+            continue
             
-        finally:
-            # Cancel timer
-            signal.alarm(0)
+        except Exception as e:
+            error_msg = f"{video_name} {duration}s: {str(e)}"
+            logging.error(error_msg)
+            print(f"Error processing {video_name} {duration}s: {str(e)}")
+            continue
+
+    # 检查是否有成功处理的数据
+    if not camera_params_out_duration:
+        return video_basename, None
     
     camera_params['total'] = np.concatenate((np.mean(camera_params_out_duration, axis=0), 
-                                                        np.std(camera_params_out_duration, axis=0)), axis=-1)
+                                                    np.std(camera_params_out_duration, axis=0)), axis=-1)
     
     return video_basename, camera_params
 
 def process_videos(base_path, video_list_path, output_base_dir, version, seed=42, durations=None, timeout=3600):
     """Process videos in parallel using multiple GPUs."""
+    # Set start method for multiprocessing
+    if mp.get_start_method(allow_none=True) != 'spawn':
+        mp.set_start_method('spawn', force=True)
+    
     # Read video list
     video_list = sorted(read_video_list(os.path.join(base_path, video_list_path)))
     
-    if durations is None:
-        durations = [30, 60, 120]  # Default durations if not specified
+    # Create log directory and set up logging
+    log_dir = Path('reconstruction_out')
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / 'reconstruction_errors.log'
     
-    # Set global random seeds
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    
-    # Set up logging
-    log_path = Path('reconstruction_out') / 'reconstruction_errors.log'
     logging.basicConfig(
         filename=log_path,
         filemode='w',
@@ -195,22 +214,29 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     processes_per_gpu = 4
     total_processes = num_gpus * processes_per_gpu
     
-    # Create process pool
-    mp.set_start_method('spawn', force=True)
-    pool = mp.Pool(processes=total_processes)
-    
     # Prepare arguments for each video
     process_args = []
     for i, video_name in enumerate(video_list):
         gpu_id = (i // processes_per_gpu) % num_gpus
         process_args.append((video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout))
     
-    # Process videos in parallel with fixed chunk size
-    results = pool.starmap(process_single_video, process_args, chunksize=1)
-    
-    # Close the pool
-    pool.close()
-    pool.join()
+    # Process videos in parallel with fixed chunk size and progress bar
+    with tqdm(total=len(video_list), desc="Processing videos") as pbar:
+        def update(*args):
+            pbar.update()
+            
+        results = []
+        processes = []
+        for args in process_args:
+            p = mp.Process(target=process_single_video, args=args, daemon=False)
+            p.start()
+            processes.append(p)
+        
+        for p in processes:
+            p.join()
+        
+        # Wait for all processes to complete
+        results = [r.get() for r in results]
     
     # Combine results
     all_camera_params = {}
@@ -222,8 +248,6 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     np.savez(os.path.join(output_base_dir, 'camera_stats.npz'), **all_camera_params)
     print(f"Camera statistics saved to {os.path.join(output_base_dir, 'camera_stats.npz')}")
 
-
-
 def main():
     parser = argparse.ArgumentParser(description="Extract frames from videos.")
     parser.add_argument("--base_path", required=True, help="Base path containing videos")
@@ -231,8 +255,9 @@ def main():
     parser.add_argument("--output_dir", required=True, help="Base output directory for frames")
     parser.add_argument('--version', type=str, choices={'gim_dkm', 'gim_lightglue'}, default='gim_dkm')
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    parser.add_argument("--durations", type=int, nargs='+', default=[30, 60, 120],
-                      help="List of video segment durations in seconds (default: [30, 60, 120])")
+    parser.add_argument("--durations", type=int, nargs='+',
+                      default=(30, 60, 120),
+                      help="List of video segment durations in seconds (default: 30 60 120)")
     parser.add_argument("--timeout", type=int, default=3600,
                       help="Timeout for processing each video segment in seconds (default: 3600)")
     

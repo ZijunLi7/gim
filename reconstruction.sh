@@ -2,7 +2,7 @@
 
 # 设置环境变量
 export PYTHONHASHSEED=777
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0,1
 export CUBLAS_WORKSPACE_CONFIG=":4096:8"
 
 # 设置 Python 解释器路径
@@ -14,7 +14,6 @@ VIDEO_LIST="2.txt"
 VERSION="gim_lightglue"
 OUTPUT_DIR="reconstruction_out"
 SEED=777
-DURATIONS="30 60 120"
 TIMEOUT=3600
 
 # 运行命令
@@ -22,6 +21,7 @@ $PYTHON video_cut.py \
     --base_path "$BASE_PATH" \
     --video_list "$VIDEO_LIST" \
     --output_dir "$OUTPUT_DIR" \
+    --version "$VERSION" \
     --seed "$SEED" \
-    --durations "$DURATIONS" \
+    --durations 30 60 120 \
     --timeout "$TIMEOUT"
