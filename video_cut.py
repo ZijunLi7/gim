@@ -163,7 +163,7 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
                 camera_params_in_duration.append(camera.params.tolist())
                 camera_params_out_duration.append(camera.params.tolist())
             camera_params_in_duration = np.array(camera_params_in_duration)
-            camera_params[duration] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
+            camera_params[str(duration)] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
                                                 np.std(camera_params_in_duration, axis=0)), axis=-1)
                             
         except TimeoutException:
@@ -188,6 +188,7 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     
     # 保存结果到临时文件
     result_path = os.path.join(output_base_dir, f"{video_basename}_result.npz")
+
     if camera_params:  # 只在有结果时保存
         np.savez(result_path, **camera_params)
 
@@ -248,7 +249,7 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
                 if os.path.exists(result_path):
                     result = np.load(result_path)
                     all_results.append((video_basename, dict(result)))
-                    os.remove(result_path)  # 清理临时文件
+                    # os.remove(result_path)  # 清理临时文件
     
     # Combine results
     all_camera_params = {}
