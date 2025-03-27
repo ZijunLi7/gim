@@ -2,7 +2,7 @@
 
 # 设置环境变量
 export PYTHONHASHSEED=777
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export CUBLAS_WORKSPACE_CONFIG=":4096:8"
 
 # 设置 Python 解释器路径
@@ -10,7 +10,7 @@ PYTHON="/home/lzj/anaconda3/envs/GIM/bin/python"
 
 # 运行参数
 BASE_PATH="data"
-VIDEO_LIST="2.txt"
+VIDEO_LIST="rec_1.txt"
 VERSION="gim_lightglue"
 OUTPUT_DIR="reconstruction_out"
 SEED=777
