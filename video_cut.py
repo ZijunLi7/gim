@@ -18,6 +18,7 @@ import torch.multiprocessing as mp
 from contextlib import contextmanager
 import threading
 import _thread
+import shutil
 
 class TimeoutException(Exception):
     pass
@@ -144,6 +145,7 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     for duration in durations:
         try:
             output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
+            reconstruction_dir = output_dir + '/' + version + '/sparse'
             video_seed = process_seed + duration
             start_time = time.time()
             
@@ -152,7 +154,6 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
                 extract_frames(video_path, output_dir + '/images', duration, video_seed)
                 colmap_reconstruction(version, root_dir=output_dir)
                 
-            reconstruction_dir = output_dir + '/' + version + '/sparse'
             for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
                 if not Path(reconstruction_dir + '/' + filename).exists():
                     raise RuntimeError(f"{filename} reconstruction failed")
@@ -167,11 +168,40 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
                                                 np.std(camera_params_in_duration, axis=0)), axis=-1)
                             
         except TimeoutException:
-            elapsed_time = int(time.time() - start_time)
-            error_msg = f"{video_name} {duration}s: Timeout after {elapsed_time} seconds"
-            logging.error(error_msg)
-            print(f"Error processing {video_name} {duration}s: Timeout")
-            continue
+            try:
+                model_path = reconstruction_dir + '/models'
+                largest_path = None
+                largest_num_images = 0
+                for path in os.listdir(model_path):
+                    if os.path.isdir(model_path + '/' + path):
+                        reconstruction = pycolmap.Reconstruction(model_path + '/' + path)
+                        num_images = reconstruction.num_reg_images()
+                        if num_images > largest_num_images:
+                            largest_path = path
+                            largest_num_images = num_images
+                assert largest_path is not None
+                print(f'Largest model is #{largest_path}'f'with {largest_num_images} images.')
+
+                for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
+                    if Path(reconstruction_dir + '/' + filename).exists():
+                        Path(reconstruction_dir + '/' + filename).unlink()
+                    shutil.move(
+                        str(model_path + '/' + largest_path + '/' + filename), str(reconstruction_dir))
+
+                reconstruction = pycolmap.Reconstruction(reconstruction_dir)
+                camera_params_in_duration = []
+                for _, camera in reconstruction.cameras.items():
+                    camera_params_in_duration.append(camera.params.tolist())
+                    camera_params_out_duration.append(camera.params.tolist())
+                camera_params_in_duration = np.array(camera_params_in_duration)
+                camera_params[str(duration)] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
+                                                    np.std(camera_params_in_duration, axis=0)), axis=-1)
+            except Exception as e:
+                elapsed_time = int(time.time() - start_time)
+                error_msg = f"{video_name} {duration}s: Timeout after {elapsed_time} seconds"
+                logging.error(error_msg)
+                print(f"Error processing {video_name} {duration}s: Timeout")  
+                continue
             
         except Exception as e:
             error_msg = f"{video_name} {duration}s: {str(e)}"
@@ -190,7 +220,10 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     result_path = os.path.join(output_base_dir, f"{video_basename}_result.npz")
 
     if camera_params:  # 只在有结果时保存
-        np.savez(result_path, **camera_params)
+        try:
+            np.savez(result_path, **camera_params)
+        except Exception as e:
+            print(len(camera_params.keys()))
 
 def process_videos(base_path, video_list_path, output_base_dir, version, seed=42, durations=None, timeout=3600):
     """Process videos in parallel using multiple GPUs."""
