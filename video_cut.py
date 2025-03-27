@@ -248,7 +248,7 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     
     # Get number of available GPUs and control processes per GPU
     num_gpus = torch.cuda.device_count()
-    processes_per_gpu = 4  # 每张卡最多运行4个进程
+    processes_per_gpu = 4  # 每张卡恰好运行4个进程
     
     # 按GPU分组视频列表
     gpu_video_groups = [[] for _ in range(num_gpus)]
@@ -256,40 +256,79 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
         gpu_idx = i % num_gpus
         gpu_video_groups[gpu_idx].append(video_name)
     
-    all_processes = []
     all_results = []
     
     with tqdm(total=len(video_list), desc="Processing videos") as pbar:
-        # 为每个GPU启动进程组
-        for gpu_id, gpu_videos in enumerate(gpu_video_groups):
-            # 将每个GPU的视频再分成小组，每组processes_per_gpu个视频
-            for i in range(0, len(gpu_videos), processes_per_gpu):
-                video_group = gpu_videos[i:i + processes_per_gpu]
-                processes = []
-                
-                # 启动当前组的所有进程
-                for video_name in video_group:
+        # 为每个GPU创建进程跟踪器
+        gpu_processes = [[] for _ in range(num_gpus)]
+        gpu_queues = [[] for _ in range(num_gpus)]  # 等待处理的视频队列
+        
+        # 初始化每个GPU的视频队列
+        for gpu_id, videos in enumerate(gpu_video_groups):
+            gpu_queues[gpu_id] = list(videos)
+        
+        # 初始化每个GPU的前processes_per_gpu个进程
+        for gpu_id in range(num_gpus):
+            for _ in range(min(processes_per_gpu, len(gpu_queues[gpu_id]))):
+                if gpu_queues[gpu_id]:
+                    video_name = gpu_queues[gpu_id].pop(0)
                     args = (video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout)
                     p = mp.Process(target=process_single_video, args=args, daemon=False)
                     p.start()
-                    processes.append(p)
-                
-                all_processes.append((processes, video_group))
+                    gpu_processes[gpu_id].append((p, video_name))
         
-        # 等待所有进程完成并收集结果
-        for processes, video_group in all_processes:
-            for p in processes:
-                p.join()
-                pbar.update(1)
+        # 持续监控所有进程，一个完成就立即启动下一个
+        remaining_videos = sum(len(q) for q in gpu_queues)
+        completed_videos = 0
+        
+        while remaining_videos > 0 or any(gpu_processes):
+            for gpu_id in range(num_gpus):
+                # 检查这个GPU上是否有完成的进程
+                i = 0
+                while i < len(gpu_processes[gpu_id]):
+                    process, video_name = gpu_processes[gpu_id][i]
+                    if not process.is_alive():
+                        # 进程完成
+                        process.join()
+                        completed_videos += 1
+                        pbar.update(1)
+                        
+                        # 收集结果
+                        video_basename = os.path.splitext(os.path.basename(video_name))[0]
+                        result_path = os.path.join(output_base_dir, f"{video_basename}_result.npz")
+                        if os.path.exists(result_path):
+                            result = np.load(result_path)
+                            all_results.append((video_basename, dict(result)))
+                        
+                        # 移除这个进程
+                        gpu_processes[gpu_id].pop(i)
+                        
+                        # 如果有等待的视频，启动新进程
+                        if gpu_queues[gpu_id]:
+                            next_video = gpu_queues[gpu_id].pop(0)
+                            remaining_videos -= 1
+                            args = (next_video, base_path, output_base_dir, version, seed, gpu_id, durations, timeout)
+                            new_p = mp.Process(target=process_single_video, args=args, daemon=False)
+                            new_p.start()
+                            gpu_processes[gpu_id].append((new_p, next_video))
+                    else:
+                        i += 1
             
-            # 收集这组进程的结果
-            for video_name in video_group:
+            # 短暂睡眠，避免CPU占用过高
+            time.sleep(0.5)
+        
+        # 等待所有剩余进程完成
+        for gpu_id in range(num_gpus):
+            for process, video_name in gpu_processes[gpu_id]:
+                process.join()
+                pbar.update(1)
+                
+                # 收集结果
                 video_basename = os.path.splitext(os.path.basename(video_name))[0]
                 result_path = os.path.join(output_base_dir, f"{video_basename}_result.npz")
                 if os.path.exists(result_path):
                     result = np.load(result_path)
                     all_results.append((video_basename, dict(result)))
-                    # os.remove(result_path)  # 清理临时文件
     
     # Combine results
     all_camera_params = {}
