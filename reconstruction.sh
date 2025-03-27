@@ -9,7 +9,7 @@ export CUBLAS_WORKSPACE_CONFIG=":4096:8"
 PYTHON="/home/lzj/anaconda3/envs/GIM/bin/python"
 
 # 运行参数
-BASE_PATH="/home/lzj/lzj/matching_codes/cursor/balanced_dust3r/data/walk"
+BASE_PATH="data"
 VIDEO_LIST="2.txt"
 VERSION="gim_lightglue"
 OUTPUT_DIR="reconstruction_out"

@@ -142,29 +142,29 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     camera_params_out_duration = []
     
     for duration in durations:
-        # try:
-        output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
-        video_seed = process_seed + duration
-        start_time = time.time()
-        
-        # 合并所有需要超时控制的操作
-        with time_limit(timeout):
-            extract_frames(video_path, output_dir + '/images', duration, video_seed)
-            colmap_reconstruction(version, root_dir=output_dir)
+        try:
+            output_dir = os.path.join(output_base_dir, video_basename, f"{duration}s")
+            video_seed = process_seed + duration
+            start_time = time.time()
             
-        reconstruction_dir = output_dir + '/' + version + '/sparse'
-        for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
-            if not Path(reconstruction_dir + '/' + filename).exists():
-                raise RuntimeError(f"{filename} reconstruction failed")
+            # 合并所有需要超时控制的操作
+            with time_limit(timeout):
+                extract_frames(video_path, output_dir + '/images', duration, video_seed)
+                colmap_reconstruction(version, root_dir=output_dir)
+                
+            reconstruction_dir = output_dir + '/' + version + '/sparse'
+            for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
+                if not Path(reconstruction_dir + '/' + filename).exists():
+                    raise RuntimeError(f"{filename} reconstruction failed")
 
-        reconstruction = pycolmap.Reconstruction(reconstruction_dir)
-        camera_params_in_duration = []
-        for _, camera in reconstruction.cameras.items():
-            camera_params_in_duration.append(camera.params.tolist())
-            camera_params_out_duration.append(camera.params.tolist())
-        camera_params_in_duration = np.array(camera_params_in_duration)
-        camera_params[duration] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
-                                            np.std(camera_params_in_duration, axis=0)), axis=-1)
+            reconstruction = pycolmap.Reconstruction(reconstruction_dir)
+            camera_params_in_duration = []
+            for _, camera in reconstruction.cameras.items():
+                camera_params_in_duration.append(camera.params.tolist())
+                camera_params_out_duration.append(camera.params.tolist())
+            camera_params_in_duration = np.array(camera_params_in_duration)
+            camera_params[duration] = np.concatenate((np.mean(camera_params_in_duration, axis=0), 
+                                                np.std(camera_params_in_duration, axis=0)), axis=-1)
                             
         except TimeoutException:
             elapsed_time = int(time.time() - start_time)
@@ -186,7 +186,10 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     camera_params['total'] = np.concatenate((np.mean(camera_params_out_duration, axis=0), 
                                                     np.std(camera_params_out_duration, axis=0)), axis=-1)
     
-    return video_basename, camera_params
+    # 保存结果到临时文件
+    result_path = os.path.join(output_base_dir, f"{video_basename}_result.npz")
+    if camera_params:  # 只在有结果时保存
+        np.savez(result_path, **camera_params)
 
 def process_videos(base_path, video_list_path, output_base_dir, version, seed=42, durations=None, timeout=3600):
     """Process videos in parallel using multiple GPUs."""
@@ -209,38 +212,47 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
         format='%(message)s'
     )
     
-    # Get number of available GPUs
+    # Get number of available GPUs and control processes per GPU
     num_gpus = torch.cuda.device_count()
-    processes_per_gpu = 4
-    total_processes = num_gpus * processes_per_gpu
+    processes_per_gpu = 4  # 每张卡最多运行4个进程
     
-    # Prepare arguments for each video
-    process_args = []
-    for i, video_name in enumerate(video_list):
-        gpu_id = (i // processes_per_gpu) % num_gpus
-        process_args.append((video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout))
+    # 将视频列表分组，每组对应一个GPU的最大进程数
+    video_groups = []
+    for i in range(0, len(video_list), processes_per_gpu):
+        video_groups.append(video_list[i:i + processes_per_gpu])
     
-    # Process videos in parallel with fixed chunk size and progress bar
+    all_results = []
     with tqdm(total=len(video_list), desc="Processing videos") as pbar:
-        def update(*args):
-            pbar.update()
+        # 按组处理视频，确保每张卡同时最多运行processes_per_gpu个进程
+        for group_idx, video_group in enumerate(video_groups):
+            processes = []
+            gpu_id = group_idx % num_gpus  # 循环使用GPU
             
-        results = []
-        processes = []
-        for args in process_args:
-            p = mp.Process(target=process_single_video, args=args, daemon=False)
-            p.start()
-            processes.append(p)
-        
-        for p in processes:
-            p.join()
-        
-        # Wait for all processes to complete
-        results = [r.get() for r in results]
+            # 启动当前组的所有进程
+            for video_name in video_group:
+                args = (video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout)
+                p = mp.Process(target=process_single_video, args=args, daemon=False)
+                p.start()
+                processes.append(p)
+            
+            # 等待当前组的所有进程完成
+            for p in processes:
+                p.join()
+                pbar.update(1)
+                
+            # 收集结果（需要修改process_single_video来支持结果返回，比如通过文件或队列）
+            for video_name in video_group:
+                video_basename = os.path.splitext(os.path.basename(video_name))[0]
+                # 从临时文件或其他方式获取结果
+                result_path = os.path.join(output_base_dir, f"{video_basename}_result.npz")
+                if os.path.exists(result_path):
+                    result = np.load(result_path)
+                    all_results.append((video_basename, dict(result)))
+                    os.remove(result_path)  # 清理临时文件
     
     # Combine results
     all_camera_params = {}
-    for video_basename, camera_params in results:
+    for video_basename, camera_params in all_results:
         if camera_params:  # Only add if we have valid results
             all_camera_params[video_basename] = camera_params
     
