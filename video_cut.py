@@ -112,7 +112,7 @@ def time_limit(seconds):
 def init_worker():
     """Initialize worker process before running."""
     import torch
-    torch.set_num_threads(1)  # 限制每个进程的 CPU 线程数
+    torch.set_num_threads(4)  # 限制每个进程的 CPU 线程数
 
 def process_single_video(video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout):
     """Process a single video on specified GPU."""
@@ -250,34 +250,41 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     num_gpus = torch.cuda.device_count()
     processes_per_gpu = 4  # 每张卡最多运行4个进程
     
-    # 将视频列表分组，每组对应一个GPU的最大进程数
-    video_groups = []
-    for i in range(0, len(video_list), processes_per_gpu):
-        video_groups.append(video_list[i:i + processes_per_gpu])
+    # 按GPU分组视频列表
+    gpu_video_groups = [[] for _ in range(num_gpus)]
+    for i, video_name in enumerate(video_list):
+        gpu_idx = i % num_gpus
+        gpu_video_groups[gpu_idx].append(video_name)
     
+    all_processes = []
     all_results = []
+    
     with tqdm(total=len(video_list), desc="Processing videos") as pbar:
-        # 按组处理视频，确保每张卡同时最多运行processes_per_gpu个进程
-        for group_idx, video_group in enumerate(video_groups):
-            processes = []
-            gpu_id = group_idx % num_gpus  # 循环使用GPU
-            
-            # 启动当前组的所有进程
-            for video_name in video_group:
-                args = (video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout)
-                p = mp.Process(target=process_single_video, args=args, daemon=False)
-                p.start()
-                processes.append(p)
-            
-            # 等待当前组的所有进程完成
+        # 为每个GPU启动进程组
+        for gpu_id, gpu_videos in enumerate(gpu_video_groups):
+            # 将每个GPU的视频再分成小组，每组processes_per_gpu个视频
+            for i in range(0, len(gpu_videos), processes_per_gpu):
+                video_group = gpu_videos[i:i + processes_per_gpu]
+                processes = []
+                
+                # 启动当前组的所有进程
+                for video_name in video_group:
+                    args = (video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout)
+                    p = mp.Process(target=process_single_video, args=args, daemon=False)
+                    p.start()
+                    processes.append(p)
+                
+                all_processes.append((processes, video_group))
+        
+        # 等待所有进程完成并收集结果
+        for processes, video_group in all_processes:
             for p in processes:
                 p.join()
                 pbar.update(1)
-                
-            # 收集结果（需要修改process_single_video来支持结果返回，比如通过文件或队列）
+            
+            # 收集这组进程的结果
             for video_name in video_group:
                 video_basename = os.path.splitext(os.path.basename(video_name))[0]
-                # 从临时文件或其他方式获取结果
                 result_path = os.path.join(output_base_dir, f"{video_basename}_result.npz")
                 if os.path.exists(result_path):
                     result = np.load(result_path)
