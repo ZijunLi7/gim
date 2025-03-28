@@ -62,7 +62,7 @@ def extract_frames(video_path, output_dir, segment_duration, seed):
     start_frame = int(start_time * video_fps)
     
     # Calculate sampling rate to get 3 frames per second
-    sampling_rate = int(video_fps / 3)
+    sampling_rate = int(video_fps / 1)
     if sampling_rate < 1:
         sampling_rate = 1
     
