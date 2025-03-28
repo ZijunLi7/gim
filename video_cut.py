@@ -19,6 +19,7 @@ from contextlib import contextmanager
 import threading
 import _thread
 import shutil
+from camera_stats import analyze_camera_stats_magnitude, plot_magnitude_recall
 
 class TimeoutException(Exception):
     pass
@@ -62,7 +63,7 @@ def extract_frames(video_path, output_dir, segment_duration, seed):
     start_frame = int(start_time * video_fps)
     
     # Calculate sampling rate to get 3 frames per second
-    sampling_rate = int(video_fps / 1)
+    sampling_rate = int(video_fps / 3)
     if sampling_rate < 1:
         sampling_rate = 1
     
@@ -225,7 +226,8 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
         except Exception as e:
             print(len(camera_params.keys()))
 
-def process_videos(base_path, video_list_path, output_base_dir, version, seed=42, durations=None, timeout=3600):
+def process_videos(base_path, video_list_path, output_base_dir, version, seed=42, durations=None, timeout=3600, prefix=None):
+    output_base_dir = os.path.join(output_base_dir, prefix)
     """Process videos in parallel using multiple GPUs."""
     # Set start method for multiprocessing
     if mp.get_start_method(allow_none=True) != 'spawn':
@@ -338,7 +340,17 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     
     # Save results
     np.savez(os.path.join(output_base_dir, 'camera_stats.npz'), **all_camera_params)
-    print(f"Camera statistics saved to {os.path.join(output_base_dir, 'camera_stats.npz')}")
+    # Analyze the 5th parameter's magnitude distribution
+    recall_stats, detailed_stats = analyze_camera_stats_magnitude(all_camera_params, param_index=4)
+    
+    # Print results
+    for duration, recalls in recall_stats.items():
+        print(f"Duration {duration}:")
+        for mag, recall in recalls.items():
+            print(f"  < {mag}: {recall:.2%}")
+    
+    # Plot visualization charts
+    plot_magnitude_recall('reconstruction_out', recall_stats, detailed_stats)
 
 def main():
     parser = argparse.ArgumentParser(description="Extract frames from videos.")
@@ -362,7 +374,8 @@ def main():
         args.version,
         args.seed,
         args.durations,
-        args.timeout
+        args.timeout,
+        args.prefix
     )
 
 if __name__ == "__main__":

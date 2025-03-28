@@ -28,4 +28,5 @@ data
 reconstruction_out*
 inputs
 outputs
+*.npz
 

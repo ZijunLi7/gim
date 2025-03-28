@@ -10,11 +10,12 @@ PYTHON="/home/lzj/anaconda3/envs/GIM/bin/python"
 
 # 运行参数
 BASE_PATH="data"
-VIDEO_LIST="rec_2.txt"
+VIDEO_LIST="100h.txt"
 VERSION="gim_lightglue"
 OUTPUT_DIR="reconstruction_out"
 SEED=777
 TIMEOUT=3600
+PREFIX="100h"
 
 # 运行命令
 $PYTHON video_cut.py \
@@ -23,5 +24,6 @@ $PYTHON video_cut.py \
     --output_dir "$OUTPUT_DIR" \
     --version "$VERSION" \
     --seed "$SEED" \
-    --durations 60 120 240\
-    --timeout "$TIMEOUT"
+    --durations 60 90 120\
+    --timeout "$TIMEOUT" \
+    --prefix "$PREFIX"
