@@ -37,7 +37,7 @@ def read_camera_stats(npz_file_path):
         print(f"Error reading {npz_file_path}: {str(e)}")
         return None
 
-def analyze_camera_stats_magnitude(camera_stats, param_index=4):
+def analyze_camera_stats_magnitude(camera_stats, durations,param_index=4):
     """
     Analyze the magnitude distribution of a specific parameter in camera statistics
     
@@ -51,7 +51,7 @@ def analyze_camera_stats_magnitude(camera_stats, param_index=4):
         2. A dictionary with detailed video information for different magnitudes at each duration
     """
     # Define magnitudes to check
-    magnitudes = [10, 100, 1000, 10000]
+    magnitudes = [10, 100, 1000, np.inf]
     
     # Initialize result dictionaries
     magnitude_stats = defaultdict(lambda: {mag: 0 for mag in magnitudes})
@@ -59,29 +59,26 @@ def analyze_camera_stats_magnitude(camera_stats, param_index=4):
     
     # Initialize detailed information dictionary to record video names and parameter values for each magnitude
     detailed_stats = defaultdict(lambda: {mag: [] for mag in magnitudes})
-    
-    # Iterate through each video
-    for video_name, durations in camera_stats.items():
-        # Iterate through each duration
-        for duration, params in durations.items():
-            if not isinstance(duration, str):
-                continue
-                
-            # Get parameter value at specified index
-            if param_index < len(params):
-                param_value = abs(params[param_index])
-                
-                # Count which magnitude this parameter value falls into
+
+    for duration in durations:
+        magnitude_stats[duration]['failed'] = 0 
+        detailed_stats[duration]['failed'] = []
+    for video_name, camera in camera_stats.items():
+        for duration in durations:
+            if duration not in camera.keys():
+                magnitude_stats[duration]['failed'] += 1
+                # Record detailed information
+                detailed_stats[duration]['failed'].append((video_name, 'failed'))
+            else:
                 for mag in magnitudes:
+                    param_value = abs(camera[duration][param_index])
                     if param_value < mag:
                         magnitude_stats[duration][mag] += 1
                         # Record detailed information
                         detailed_stats[duration][mag].append((video_name, param_value))
                         break
-                
-                # Increment total count for this duration
-                total_counts[duration] += 1
-    
+            total_counts[duration] += 1
+
     # Calculate recall rates for different magnitudes at each duration
     recall_stats = {}
     for duration, mag_counts in magnitude_stats.items():
@@ -101,7 +98,7 @@ def plot_magnitude_recall(output_dir, recall_stats, detailed_stats=None):
         detailed_stats: Detailed information statistics returned from analyze_camera_stats_magnitude function
     """
     durations = recall_stats.keys()
-    magnitudes = [10, 100, 1000, 10000]
+    magnitudes = [10, 100, 1000, np.inf, 'failed']
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
@@ -110,7 +107,10 @@ def plot_magnitude_recall(output_dir, recall_stats, detailed_stats=None):
     
     for i, mag in enumerate(magnitudes):
         recalls = [recall_stats[duration][mag] for duration in durations]
-        ax.bar(index + i * bar_width, recalls, bar_width, label=f'< {mag}')
+        if mag != 'failed':
+            ax.bar(index + i * bar_width, recalls, bar_width, label=f'< {mag}')
+        else:
+            ax.bar(index + i * bar_width, recalls, bar_width, label=f'failed')
     
     ax.set_xlabel('duration')
     ax.set_ylabel('recall')
@@ -139,7 +139,10 @@ def plot_magnitude_recall(output_dir, recall_stats, detailed_stats=None):
                 for mag in magnitudes:
                     recall = recall_stats[duration][mag]
                     count = len(detailed_stats[duration][mag])
-                    f.write(f"  < {mag}: {recall:.2%} ({count} videos)\n")
+                    if mag != 'failed':
+                        f.write(f"  < {mag}: {recall:.2%} ({count} videos)\n")
+                    else:
+                        f.write(f" {mag}: {recall:.2%} ({count} videos)\n")
                 f.write("\n")
             
             # Write detailed information
@@ -148,11 +151,17 @@ def plot_magnitude_recall(output_dir, recall_stats, detailed_stats=None):
             for duration in durations:
                 f.write(f"Duration {duration}:\n")
                 for mag in magnitudes:
-                    f.write(f"  Videos < {mag}:\n")
+                    if mag != 'failed':
+                        f.write(f"  Videos < {mag}:\n")
+                    else:
+                        f.write(f"  Videos failed:\n")
                     # Sort by parameter value
                     sorted_videos = sorted(detailed_stats[duration][mag], key=lambda x: x[1])
                     for video_name, param_value in sorted_videos:
-                        f.write(f"    {video_name}: {param_value:.6f}\n")
+                        if mag != 'failed':
+                            f.write(f"    {video_name}: {param_value:.6f}\n")
+                        else:
+                            f.write(f"    {video_name}: failed\n")
                     f.write("\n")
                 f.write("\n")
             
@@ -167,7 +176,7 @@ if __name__ == "__main__":
     camera_stats = read_camera_stats(npz_file_path)
     
     # Analyze the 5th parameter's magnitude distribution
-    recall_stats, detailed_stats = analyze_camera_stats_magnitude(camera_stats, param_index=4)
+    recall_stats, detailed_stats = analyze_camera_stats_magnitude(camera_stats, ['30', '60', '120'], param_index=4)
     
     # Print results
     for duration, recalls in recall_stats.items():
