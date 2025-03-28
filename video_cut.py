@@ -340,8 +340,9 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     
     # Save results
     np.savez(os.path.join(output_base_dir, 'camera_stats.npz'), **all_camera_params)
+    durations = [str(k) for k in durations]
     # Analyze the 5th parameter's magnitude distribution
-    recall_stats, detailed_stats = analyze_camera_stats_magnitude(all_camera_params, param_index=4)
+    recall_stats, detailed_stats = analyze_camera_stats_magnitude(all_camera_params, durations, param_index=4)
     
     # Print results
     for duration, recalls in recall_stats.items():
@@ -350,7 +351,7 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
             print(f"  < {mag}: {recall:.2%}")
     
     # Plot visualization charts
-    plot_magnitude_recall('reconstruction_out', recall_stats, detailed_stats)
+    plot_magnitude_recall(output_base_dir, recall_stats, detailed_stats)
 
 def main():
     parser = argparse.ArgumentParser(description="Extract frames from videos.")
@@ -364,6 +365,7 @@ def main():
                       help="List of video segment durations in seconds (default: 30 60 120)")
     parser.add_argument("--timeout", type=int, default=3600,
                       help="Timeout for processing each video segment in seconds (default: 3600)")
+    parser.add_argument("--prefix", type=str, default=None, help="Prefix for output directory")
     
     args = parser.parse_args()
 
