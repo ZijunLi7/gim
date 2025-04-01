@@ -127,6 +127,7 @@ def main(sfm_dir: Path,
                    min_match_score, skip_geometric_verification)
     if not skip_geometric_verification:
         estimation_and_geometric_verification(database, pairs, verbose)
+    unique_camera_ids(database)
     reconstruction = run_reconstruction(
         sfm_dir, database, image_dir, verbose, mapper_options)
     if reconstruction is not None:

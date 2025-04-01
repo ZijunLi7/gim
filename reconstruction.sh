@@ -15,7 +15,7 @@ VERSION="gim_dkm"
 OUTPUT_DIR="reconstruction_out"
 SEED=777
 TIMEOUT=3600
-PREFIX="100h_dkm_rec_1"
+PREFIX="100h_dkm_unique_camera_id_rec_1"
 
 # 运行命令
 $PYTHON video_cut.py \
