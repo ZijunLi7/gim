@@ -48,6 +48,14 @@ def get_image_ids(database_path: Path) -> Dict[str, int]:
     db.close()
     return images
 
+def unique_camera_ids(database_path: Path):
+    db = COLMAPDatabase.connect(database_path)
+    for image_id, _ in db.execute("SELECT image_id, name FROM images"):                       
+        db.execute(
+            "UPDATE images SET camera_id=? WHERE image_id=?", (1, image_id),
+                   )
+    db.commit()
+    db.close()
 
 def run_reconstruction(sfm_dir: Path,
                        database_path: Path,
