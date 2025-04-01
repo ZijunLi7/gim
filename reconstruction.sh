@@ -10,12 +10,12 @@ PYTHON="/home/lzj/anaconda3/envs/GIM/bin/python"
 
 # 运行参数
 BASE_PATH="data"
-VIDEO_LIST="100h.txt"
-VERSION="gim_lightglue"
+VIDEO_LIST="rec_1.txt"
+VERSION="gim_dkm"
 OUTPUT_DIR="reconstruction_out"
 SEED=777
 TIMEOUT=3600
-PREFIX="100h"
+PREFIX="100h_dkm_rec_1"
 
 # 运行命令
 $PYTHON video_cut.py \

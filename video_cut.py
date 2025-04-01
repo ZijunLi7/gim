@@ -237,20 +237,20 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     video_list = sorted(read_video_list(os.path.join(base_path, video_list_path)))
     
     # Create log directory and set up logging
-    log_dir = Path('reconstruction_out')
+    log_dir = Path(output_base_dir)
     log_dir.mkdir(exist_ok=True)
     log_path = log_dir / 'reconstruction_errors.log'
     
     logging.basicConfig(
         filename=log_path,
-        filemode='w',
+        filemode='a',
         level=logging.ERROR,
         format='%(message)s'
     )
     
     # Get number of available GPUs and control processes per GPU
     num_gpus = torch.cuda.device_count()
-    processes_per_gpu = 4  # 每张卡恰好运行4个进程
+    processes_per_gpu = 1  # 每张卡恰好运行4个进程
     
     # 按GPU分组视频列表
     gpu_video_groups = [[] for _ in range(num_gpus)]
