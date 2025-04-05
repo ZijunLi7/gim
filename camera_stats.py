@@ -172,11 +172,11 @@ def plot_magnitude_recall(output_dir, recall_stats, detailed_stats=None):
 
 # Usage example
 if __name__ == "__main__":
-    npz_file_path = "/home/lzj/lzj/matching_codes/gim/reconstruction_out/100h_dkm_rec_1/4K - Amsterdam - Street Walk [ 60 FPS ]_result.npz"
+    npz_file_path = "/home/lzj/lzj/matching_codes/gim/reconstruction_out/100h_dkm_unique_camera_id_rec_1/camera_stats.npz"
     camera_stats = read_camera_stats(npz_file_path)
     
     # Analyze the 5th parameter's magnitude distribution
-    recall_stats, detailed_stats = analyze_camera_stats_magnitude(camera_stats, ['30', '60', '120'], param_index=4)
+    recall_stats, detailed_stats = analyze_camera_stats_magnitude(camera_stats, ['60', '90', '120', 'total'], param_index=4)
     
     # Print results
     for duration, recalls in recall_stats.items():

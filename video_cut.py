@@ -113,7 +113,7 @@ def time_limit(seconds):
 def init_worker():
     """Initialize worker process before running."""
     import torch
-    torch.set_num_threads(4)  # 限制每个进程的 CPU 线程数
+    torch.set_num_threads(16)  # 限制每个进程的 CPU 线程数
 
 def process_single_video(video_name, base_path, output_base_dir, version, seed, gpu_id, durations, timeout):
     """Process a single video on specified GPU."""
@@ -341,6 +341,7 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     # Save results
     np.savez(os.path.join(output_base_dir, 'camera_stats.npz'), **all_camera_params)
     durations = [str(k) for k in durations]
+    durations.append('total')
     # Analyze the 5th parameter's magnitude distribution
     recall_stats, detailed_stats = analyze_camera_stats_magnitude(all_camera_params, durations, param_index=4)
     

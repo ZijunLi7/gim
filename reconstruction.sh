@@ -10,12 +10,12 @@ PYTHON="/home/lzj/anaconda3/envs/GIM/bin/python"
 
 # 运行参数
 BASE_PATH="data"
-VIDEO_LIST="rec_1.txt"
+VIDEO_LIST="100h.txt"
 VERSION="gim_dkm"
 OUTPUT_DIR="reconstruction_out"
 SEED=777
-TIMEOUT=3600
-PREFIX="100h_dkm_unique_camera_id_rec_1"
+TIMEOUT=7200
+PREFIX="100h_dkm_unique_camera"
 
 # 运行命令
 $PYTHON video_cut.py \
@@ -24,6 +24,6 @@ $PYTHON video_cut.py \
     --output_dir "$OUTPUT_DIR" \
     --version "$VERSION" \
     --seed "$SEED" \
-    --durations 60 90 120\
+    --durations 80 90 100\
     --timeout "$TIMEOUT" \
     --prefix "$PREFIX"
