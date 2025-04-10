@@ -4,6 +4,12 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import datetime
 
+def read_video_list(video_list_path):
+    """Read the list of videos from a text file."""
+    with open(video_list_path, 'r') as f:
+        videos = [line.strip() for line in f.readlines()]
+    return videos
+
 def read_single_camera_stats(npz_file_path):
     """
     Read saved camera parameter statistics data
@@ -208,13 +214,70 @@ def plot_magnitude_recall(output_dir, recall_stats, detailed_stats=None):
 # Usage example
 if __name__ == "__main__":
     npz_file_path = "/home/lzj/lzj/matching_codes/gim/reconstruction_out/camera_stats.npz"
+    scene_path = "/home/lzj/lzj/matching_codes/gim/data/100h.txt"
     camera_stats = read_total_camera_stats(npz_file_path)
+    video_list = sorted(read_video_list(scene_path))
+    durations = ['80', '90', '100']
+
+    not_in_camera_stats = []
+    failed_camera_stats = []
+    single_camera_stats = []
+    warning_camera_stats = []
+    valid_scene={}
+
+
+    for video_name in video_list:
+        if video_name not in camera_stats.keys():
+            not_in_camera_stats.append(video_name)
+        else:
+            if len(camera_stats[video_name].keys()) == 2:
+                single_camera_stats.append(video_name)
+            elif camera_stats[video_name]['total'][4] < 100:
+                valid_scene[video_name] = camera_stats[video_name]['total'][:3]
+            elif len(camera_stats[video_name].keys()) == 4:
+                tuples=[[0, 1], [0, 2], [1, 2]]
+                signal = False
+                for tuple in tuples:
+                    duration0 = durations[tuple[0]]
+                    duration1 = durations[tuple[1]]
+                    dist = abs(camera_stats[video_name][duration0][0] - camera_stats[video_name][duration1][0])
+                    if dist < 50:
+                        warning_camera_stats.append(video_name)
+                        valid_scene[video_name] = camera_stats[video_name]['total'][:3]
+                        valid_scene[video_name][0] = (camera_stats[video_name][duration0][0] * int(duration0) + camera_stats[video_name][duration1][0] * int(duration1)) / (int(duration0) + int(duration1))
+                        signal = True
+                if not signal:
+                    failed_camera_stats.append(video_name)
+            else:
+                failed_camera_stats.append(video_name)
+
+    with open("/home/lzj/lzj/matching_codes/gim/data/valid_scene.txt", 'w') as f:
+        for valid_scene in valid_scene.keys():
+            f.write(f"{valid_scene}\n")
     
+    with open("/home/lzj/lzj/matching_codes/gim/data/abnormal_camera_stats.txt", 'w') as f:
+        f.write("not in camera stats:\n")
+        for scene in not_in_camera_stats:
+            f.write(f"{scene}\n")
+        f.write("failed camera stats:\n")
+        for scene in failed_camera_stats:
+            f.write(f"{scene}\n")
+        f.write("single camera stats:\n")
+        for scene in single_camera_stats:
+            f.write(f"{scene}\n")
+        f.write("warning camera stats:\n")
+        for scene in warning_camera_stats:
+            f.write(f"{scene}\n")
+        
+
+
+
+
     # Analyze the 5th parameter's magnitude distribution
-    recall_stats, detailed_stats = analyze_camera_stats_magnitude(camera_stats, ['60', '90', '120', 'total'], param_index=4)
+    # recall_stats, detailed_stats = analyze_camera_stats_magnitude(camera_stats, ['60', '90', '120', 'total'], param_index=4)
     
     # Print results
-    for duration, recalls in recall_stats.items():
-        print(f"Duration {duration}:")
-        for mag, recall in recalls.items():
-            print(f"  < {mag}: {recall:.2%}")
+    # for duration, recalls in recall_stats.items():
+    #     print(f"Duration {duration}:")
+    #     for mag, recall in recalls.items():
+    #         print(f"  < {mag}: {recall:.2%}")
