@@ -137,7 +137,7 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     torch.backends.cudnn.benchmark = False
     
     video_path = os.path.join(base_path, 'video_1080p/' + video_name + '.mp4')
-    video_basename = os.path.splitext(os.path.basename(video_name))[0]
+    video_basename = video_name
     
     # Store camera parameters for different durations
     camera_params = {}
@@ -157,7 +157,7 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
                 
             for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
                 if not Path(reconstruction_dir + '/' + filename).exists():
-                    raise RuntimeError(f"{filename} reconstruction failed")
+                    raise RuntimeError(f"reconstruction failed")
 
             reconstruction = pycolmap.Reconstruction(reconstruction_dir)
             camera_params_in_duration = []
