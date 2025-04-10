@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import datetime
 
-def read_camera_stats(npz_file_path):
+def read_single_camera_stats(npz_file_path):
     """
     Read saved camera parameter statistics data
     
@@ -35,6 +35,41 @@ def read_camera_stats(npz_file_path):
     
     except Exception as e:
         print(f"Error reading {npz_file_path}: {str(e)}")
+        return None
+    
+def read_total_camera_stats(npz_file_path):
+    """
+    读取 video_cut.py 生成的相机参数统计数据的 NPZ 文件
+    
+    参数:
+        npz_file_path: NPZ 文件路径
+    
+    返回:
+        字典，其中:
+        - 键是视频名称
+        - 值是另一个字典，其中:
+            - 键是时长（如 '30', '60', '120', 'total'）
+            - 值是对应的相机参数数组（包含均值和标准差）
+    """
+    try:
+        # 加载 NPZ 文件
+        data = np.load(npz_file_path, allow_pickle=True)
+        
+        # 构建结果字典
+        camera_stats = {}
+        for video_name in data.files:
+            # 获取该视频的所有时长数据
+            durations_data = {}
+            video_data = data[video_name].item()  # 将数组转换为字典
+            for duration, values in video_data.items():
+                durations_data[duration] = values
+            camera_stats[video_name] = durations_data
+        
+        print(f"成功从 {npz_file_path} 读取了 {len(camera_stats)} 个视频的相机参数")
+        return camera_stats
+    
+    except Exception as e:
+        print(f"读取 {npz_file_path} 时出错: {str(e)}")
         return None
 
 def analyze_camera_stats_magnitude(camera_stats, durations,param_index=4):
@@ -172,8 +207,8 @@ def plot_magnitude_recall(output_dir, recall_stats, detailed_stats=None):
 
 # Usage example
 if __name__ == "__main__":
-    npz_file_path = "/home/lzj/lzj/matching_codes/gim/reconstruction_out/100h_dkm_unique_camera_id_rec_1/camera_stats.npz"
-    camera_stats = read_camera_stats(npz_file_path)
+    npz_file_path = "/home/lzj/lzj/matching_codes/gim/reconstruction_out/camera_stats.npz"
+    camera_stats = read_total_camera_stats(npz_file_path)
     
     # Analyze the 5th parameter's magnitude distribution
     recall_stats, detailed_stats = analyze_camera_stats_magnitude(camera_stats, ['60', '90', '120', 'total'], param_index=4)
@@ -183,6 +218,3 @@ if __name__ == "__main__":
         print(f"Duration {duration}:")
         for mag, recall in recalls.items():
             print(f"  < {mag}: {recall:.2%}")
-    
-    # Plot visualization charts
-    plot_magnitude_recall('reconstruction_out', recall_stats, detailed_stats)
