@@ -6,7 +6,6 @@ import json
 import argparse
 from tqdm import tqdm
 from reconstruction import colmap_reconstruction
-import logging
 from pathlib import Path
 import torch
 import signal
@@ -142,6 +141,8 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
     # Store camera parameters for different durations
     camera_params = {}
     camera_params_out_duration = []
+    os.makedirs(os.path.join(output_base_dir, video_basename), exist_ok=True)
+    log_path = os.path.join(output_base_dir, video_basename, "reconstruction_errors.txt")
     
     for duration in durations:
         try:
@@ -157,7 +158,7 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
                 
             for filename in ['images.bin', 'cameras.bin', 'points3D.bin']:
                 if not Path(reconstruction_dir + '/' + filename).exists():
-                    raise RuntimeError(f"reconstruction failed")
+                    raise FileNotFoundError(f"reconstruction failed")
 
             reconstruction = pycolmap.Reconstruction(reconstruction_dir)
             camera_params_in_duration = []
@@ -199,14 +200,16 @@ def process_single_video(video_name, base_path, output_base_dir, version, seed, 
                                                     np.std(camera_params_in_duration, axis=0)), axis=-1)
             except Exception as e:
                 elapsed_time = int(time.time() - start_time)
-                error_msg = f"{video_name} {duration}s: Timeout after {elapsed_time} seconds"
-                logging.error(error_msg)
+                error_msg = f"{duration}s: Timeout after {elapsed_time} seconds"
+                with open(log_path, 'a') as f:
+                    f.write(error_msg + '\n')
                 print(f"Error processing {video_name} {duration}s: Timeout")  
                 continue
             
         except Exception as e:
-            error_msg = f"{video_name} {duration}s: {str(e)}"
-            logging.error(error_msg)
+            error_msg = f"{duration}s: {str(e)}"
+            with open(log_path, 'a') as f:
+                    f.write(error_msg + '\n')
             print(f"Error processing {video_name} {duration}s: {str(e)}")
             continue
 
@@ -235,18 +238,6 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     
     # Read video list
     video_list = sorted(read_video_list(os.path.join(base_path, video_list_path)))
-    
-    # Create log directory and set up logging
-    log_dir = Path(output_base_dir)
-    log_dir.mkdir(exist_ok=True)
-    log_path = log_dir / 'reconstruction_errors.log'
-    
-    logging.basicConfig(
-        filename=log_path,
-        filemode='a',
-        level=logging.ERROR,
-        format='%(message)s'
-    )
     
     # Get number of available GPUs and control processes per GPU
     num_gpus = torch.cuda.device_count()
@@ -340,6 +331,25 @@ def process_videos(base_path, video_list_path, output_base_dir, version, seed=42
     
     # Save results
     np.savez(os.path.join(output_base_dir, 'camera_stats.npz'), **all_camera_params)
+    
+    # 合并所有日志文件
+    combined_log_path = os.path.join(output_base_dir, 'combined_reconstruction_errors.txt')
+    with open(combined_log_path, 'w', encoding='utf-8') as combined_log:
+        # 遍历所有视频文件夹
+        for video_dir in os.listdir(output_base_dir):
+            video_path = os.path.join(output_base_dir, video_dir)
+            if os.path.isdir(video_path):
+                log_path = os.path.join(video_path, "reconstruction_errors.txt")
+                if os.path.exists(log_path):
+                    # 写入视频名称作为分隔符
+                    combined_log.write(f"\n{'='*50}\n")
+                    combined_log.write(f"Video: {video_dir}\n")
+                    combined_log.write(f"{'='*50}\n\n")
+                    
+                    # 读取并写入原始日志内容
+                    with open(log_path, 'r', encoding='utf-8') as f:
+                        combined_log.write(f.read())
+    
     durations = [str(k) for k in durations]
     durations.append('total')
     # Analyze the 5th parameter's magnitude distribution
