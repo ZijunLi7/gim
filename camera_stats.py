@@ -215,6 +215,7 @@ def plot_magnitude_recall(output_dir, recall_stats, detailed_stats=None):
 if __name__ == "__main__":
     npz_file_path = "/home/lzj/lzj/matching_codes/gim/reconstruction_out/camera_stats.npz"
     scene_path = "/home/lzj/lzj/matching_codes/gim/data/100h.txt"
+    output_path = "/home/lzj/lzj/matching_codes/gim/data/camera_stats.npz"
     camera_stats = read_total_camera_stats(npz_file_path)
     video_list = sorted(read_video_list(scene_path))
     durations = ['80', '90', '100']
@@ -250,6 +251,7 @@ if __name__ == "__main__":
                     failed_camera_stats.append(video_name)
             else:
                 failed_camera_stats.append(video_name)
+    np.savez(output_path, **valid_scene)
 
     with open("/home/lzj/lzj/matching_codes/gim/data/valid_scene.txt", 'w') as f:
         for valid_scene in valid_scene.keys():
@@ -259,12 +261,15 @@ if __name__ == "__main__":
         f.write("not in camera stats:\n")
         for scene in not_in_camera_stats:
             f.write(f"{scene}\n")
+        f.write("\n")
         f.write("failed camera stats:\n")
         for scene in failed_camera_stats:
             f.write(f"{scene}\n")
+        f.write("\n")
         f.write("single camera stats:\n")
         for scene in single_camera_stats:
             f.write(f"{scene}\n")
+        f.write("\n")
         f.write("warning camera stats:\n")
         for scene in warning_camera_stats:
             f.write(f"{scene}\n")
